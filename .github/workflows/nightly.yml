@@ -114,9 +114,24 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NIGHTLY_TAG="${{ steps.tag.outputs.tag }}"
           NIGHTLY_DATE=$(date +%Y-%m-%d)
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+
+          # Create release notes
+          cat > /tmp/release_notes.txt << 'EOF'
+          Automated nightly build from main branch.
+
+          **Date**: ${NIGHTLY_DATE}
+          **Commit**: ${COMMIT_SHA}
+
+          This is a pre-release nightly build for testing purposes. Use at your own risk.
+
+          For stable releases, see: https://github.com/${{ github.repository }}/releases
+          EOF
 
           # Check if release exists
           if gh release view "$NIGHTLY_TAG" >/dev/null 2>&1; then
@@ -126,20 +141,11 @@ jobs:
             echo "Creating new release..."
             gh release create "$NIGHTLY_TAG" \
               --title "Nightly Build - $NIGHTLY_DATE" \
-              --notes "Automated nightly build from main branch.
-
-**Date**: $NIGHTLY_DATE
-**Commit**: $(git rev-parse --short HEAD)
-
-This is a pre-release nightly build for testing purposes. Use at your own risk.
-
-For stable releases, see: https://github.com/${{ github.repository }}/releases" \
+              --notes-file /tmp/release_notes.txt \
               --prerelease \
-              --latest=false
+              --latest=false || echo "Release creation failed"
             gh release upload "$NIGHTLY_TAG" dist/**/* || echo "Upload failed"
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Notify on failure
         if: failure()
