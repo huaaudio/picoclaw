@@ -140,10 +140,6 @@ jobs:
           EOF
           )
           
-          # Download assets from the newly created release
-          mkdir -p build
-          gh release download "$TAG" --dir build
-          
           # Download assets from the newly created release if it exists,
           # otherwise fall back to using locally built dist/ artifacts.
           mkdir -p build
