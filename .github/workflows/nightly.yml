@@ -136,7 +136,6 @@ jobs:
             echo "Release $TAG already exists, updating metadata and assets..."
             gh release edit "$TAG" \
               --title "$TITLE" \
-              --notes "$NOTES" \
               --prerelease
             gh release upload "$TAG" build/* --clobber
           else
@@ -146,15 +145,19 @@ jobs:
               --notes "$NOTES" \
               --target "${{ github.sha }}" \
               --prerelease \
+              --generate-notes \
               build/*
           fi
+
+          echo "Fetching final release notes for rolling nightly..."
+          FULL_NOTES=$(gh release view "$TAG" --json body -q .body || echo "$NOTES")
 
           echo "Updating rolling 'nightly' release..."
           gh release delete nightly --cleanup-tag -y >/dev/null 2>&1 || true
           sleep 2
           gh release create nightly \
             --title "Nightly Build" \
-            --notes "$NOTES" \
+            --notes "$FULL_NOTES" \
             --target "${{ github.sha }}" \
             --prerelease \
             build/*
