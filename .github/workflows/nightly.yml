@@ -144,9 +144,21 @@ jobs:
           mkdir -p build
           gh release download "$TAG" --dir build
           
-          echo "Updating rolling 'nightly' release..."
-          gh release delete nightly --cleanup-tag -y >/dev/null 2>&1 || true
-          sleep 2
+          # Download assets from the newly created release if it exists,
+          # otherwise fall back to using locally built dist/ artifacts.
+          mkdir -p build
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Downloading assets from GitHub release for $TAG..."
+            gh release download "$TAG" --dir build
+          else
+            echo "GitHub release for $TAG not found; falling back to local dist/ artifacts..."
+            if [ -d "dist" ]; then
+              cp -R dist/* build/
+            else
+              echo "Error: no GitHub release for $TAG and no local dist/ directory found." >&2
+              exit 1
+            fi
+          fi
           gh release create nightly \
             --title "Nightly Build" \
             --notes "$NOTES" \
