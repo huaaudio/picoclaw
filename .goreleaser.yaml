@@ -116,7 +116,7 @@ dockers_v2:
       - picoclaw
     images:
       - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/picoclaw"
-      - "docker.io/{{ .Env.DOCKERHUB_IMAGE_NAME }}"
+      - '{{ if not (isEnvSet "NIGHTLY_BUILD") }}docker.io/{{ .Env.DOCKERHUB_IMAGE_NAME }}{{ end }}'
     tags:
       - "{{ .Tag }}"
       - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly{{ else }}latest{{ end }}'
