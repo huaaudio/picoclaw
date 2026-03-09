@@ -38,7 +38,11 @@ jobs:
           VERSION=$TAG
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Nightly build $VERSION"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists, reusing existing tag"
+          else
+            git tag -a "$TAG" -m "Nightly build $VERSION"
+          fi
           git push origin "$TAG"
           
           COMPARE_URL="https://github.com/${{ github.repository }}/commits/${TAG}"
@@ -115,6 +119,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
