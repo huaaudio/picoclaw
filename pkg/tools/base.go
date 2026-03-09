@@ -23,7 +23,19 @@ type toolCtxKey struct{ name string }
 var (
 	ctxKeyChannel = &toolCtxKey{"channel"}
 	ctxKeyChatID  = &toolCtxKey{"chatID"}
+	ctxKeyEnv     = &toolCtxKey{"env"}
 )
+
+// WithToolEnv returns a child context carrying a map of environment variables.
+func WithToolEnv(ctx context.Context, env map[string]string) context.Context {
+	return context.WithValue(ctx, ctxKeyEnv, env)
+}
+
+// ToolEnv extracts the environment variable map from ctx.
+func ToolEnv(ctx context.Context) map[string]string {
+	v, _ := ctx.Value(ctxKeyEnv).(map[string]string)
+	return v
+}
 
 // WithToolContext returns a child context carrying channel and chatID.
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {

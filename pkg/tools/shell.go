@@ -221,6 +221,15 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		cmd.Dir = cwd
 	}
 
+	envVars := ToolEnv(ctx)
+	if len(envVars) > 0 {
+		env := os.Environ()
+		for k, v := range envVars {
+			env = append(env, k+"="+v)
+		}
+		cmd.Env = env
+	}
+
 	prepareCommandForTermination(cmd)
 
 	var stdout, stderr bytes.Buffer

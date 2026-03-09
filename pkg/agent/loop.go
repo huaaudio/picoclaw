@@ -222,6 +222,20 @@ func registerSharedTools(
 			if cfg.Tools.IsToolEnabled("subagent") {
 				subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace)
 				subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
+
+				modelCfg, _ := cfg.GetModelConfig(agent.Model)
+				if modelCfg != nil && modelCfg.Proxy != "" {
+					subagentManager.SetEnv(map[string]string{
+						"HTTP_PROXY":  modelCfg.Proxy,
+						"HTTPS_PROXY": modelCfg.Proxy,
+						"ALL_PROXY":   modelCfg.Proxy,
+						"http_proxy":  modelCfg.Proxy,
+						"https_proxy": modelCfg.Proxy,
+						"all_proxy":   modelCfg.Proxy,
+					})
+				}
+				subagentManager.SetTools(agent.Tools)
+
 				spawnTool := tools.NewSpawnTool(subagentManager)
 				currentAgentID := agentID
 				spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {

@@ -34,6 +34,7 @@ type SubagentManager struct {
 	hasMaxTokens   bool
 	hasTemperature bool
 	nextID         int
+	env            map[string]string
 }
 
 func NewSubagentManager(
@@ -67,6 +68,13 @@ func (sm *SubagentManager) SetTools(tools *ToolRegistry) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.tools = tools
+}
+
+// SetEnv sets environment variables to be injected into downstream tools.
+func (sm *SubagentManager) SetEnv(env map[string]string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.env = env
 }
 
 // RegisterTool registers a tool for subagent execution.
@@ -147,7 +155,12 @@ After completing the task, provide a clear summary of what was done.`
 	temperature := sm.temperature
 	hasMaxTokens := sm.hasMaxTokens
 	hasTemperature := sm.hasTemperature
+	env := sm.env
 	sm.mu.RUnlock()
+
+	if len(env) > 0 {
+		ctx = WithToolEnv(ctx, env)
+	}
 
 	var llmOptions map[string]any
 	if hasMaxTokens || hasTemperature {
@@ -301,7 +314,12 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	temperature := sm.temperature
 	hasMaxTokens := sm.hasMaxTokens
 	hasTemperature := sm.hasTemperature
+	env := sm.env
 	sm.mu.RUnlock()
+
+	if len(env) > 0 {
+		ctx = WithToolEnv(ctx, env)
+	}
 
 	var llmOptions map[string]any
 	if hasMaxTokens || hasTemperature {
