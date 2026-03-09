@@ -1,7 +1,10 @@
 # ============================================================
 # Stage 1: Build the picoclaw binary
 # ============================================================
-FROM golang:1.26.0-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.0-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache git make
 
@@ -13,7 +16,7 @@ RUN go mod download
 
 # Copy source and build
 COPY . .
-RUN make build
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH make build PLATFORM=$TARGETOS ARCH=$TARGETARCH
 
 # ============================================================
 # Stage 2: Node.js-based runtime with full MCP support
