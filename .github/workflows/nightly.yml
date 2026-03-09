@@ -9,19 +9,22 @@ permissions:
   contents: read
 
 jobs:
-  generate-version:
-    name: Generate Version
+  create-tag:
+    name: Create Git Tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      changelog: ${{ steps.version.outputs.changelog }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Generate version
+      - name: Generate and push tag
         id: version
         run: |
           DATE=$(date -u +%Y%m%d)
@@ -33,43 +36,47 @@ jobs:
             VERSION="${BASE_VERSION}-nightly-${DATE}-${SHA}"
           fi
           TAG="nightly-${DATE}-${SHA}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Nightly build $VERSION"
+          git push origin "$TAG"
+          
+          COMPARE_URL="https://github.com/${{ github.repository }}/commits/${TAG}"
+          if [ -n "$BASE_VERSION" ] && [ "$BASE_VERSION" != "v0.0.0" ]; then
+            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${BASE_VERSION}...${TAG}"
+          fi
+          echo "changelog=**Full Changelog**: $COMPARE_URL" >> "$GITHUB_OUTPUT"
+          
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-  build:
-    name: Build
+  release:
+    name: GoReleaser Release
+    needs: create-tag
     runs-on: ubuntu-latest
-    needs: generate-version
+    permissions:
+      contents: write
+      packages: write
     steps:
-      - name: Checkout
+      - name: Checkout tag
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.create-tag.outputs.tag }}
 
-      - name: Setup Go
+      - name: Setup Go from go.mod
+        id: setup-go
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
-      - name: Build
-        env:
-          VERSION: ${{ needs.generate-version.outputs.version }}
-        run: make build-all VERSION="$VERSION"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          name: picoclaw-binaries
-          path: build
+          node-version: 22
 
-  build-docker:
-    name: Build Docker
-    runs-on: ubuntu-latest
-    needs: generate-version
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Setup pnpm
+        run: corepack enable && corepack prepare pnpm@latest --activate
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -77,77 +84,72 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=${{ needs.generate-version.outputs.tag }}
-            type=raw,value=${{ needs.generate-version.outputs.version }}
-            type=raw,value=nightly
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
-          context: .
-          file: ./docker/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64,linux/riscv64
-          provenance: false
+          distribution: goreleaser
+          version: ~> v2
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_REPOSITORY }}
+          GOVERSION: ${{ steps.setup-go.outputs.go-version }}
+          NIGHTLY_BUILD: "true"
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
 
-  release:
-    name: Release
+  update-rolling:
+    name: Update Rolling Nightly
+    needs: [create-tag, release]
     runs-on: ubuntu-latest
-    needs: [generate-version, build, build-docker]
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v6
-        with:
-          name: picoclaw-binaries
-          path: ./build
-
-      - name: Create release
+      - name: Update nightly release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-tag.outputs.tag }}
+          TITLE: ${{ needs.create-tag.outputs.version }}
         run: |
-          TAG="${{ needs.generate-version.outputs.tag }}"
-          TITLE="${{ needs.generate-version.outputs.version }}"
-          NOTES=$'Nightly build for **${{ needs.generate-version.outputs.version }}**\n\nThis is an automated build and may be unstable. Use with caution.'
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists, updating metadata and assets..."
-            gh release edit "$TAG" \
-              --title "$TITLE" \
-              --notes "$NOTES" \
-              --prerelease
-            gh release upload "$TAG" build/* --clobber
-          else
-            echo "Creating new release $TAG..."
-            gh release create "$TAG" \
-              --title "$TITLE" \
-              --notes "$NOTES" \
-              --target "${{ github.sha }}" \
-              --prerelease \
-              build/*
+          # Fetch the auto-generated notes from the release
+          NOTES=$(gh release view "$TAG" --json body -q .body || true)
+          CHANGELOG='${{ needs.create-tag.outputs.changelog }}'
+          if [ -z "$NOTES" ]; then
+            NOTES=$(cat <<EOF
+          Nightly build for **${TITLE}**
+          
+          This is an automated build and may be unstable. Use with caution.
+          
+          ${CHANGELOG}
+          EOF
+            )
           fi
-
+          
+          # Download assets from the newly created release
+          mkdir -p build
+          gh release download "$TAG" --dir build
+          
           echo "Updating rolling 'nightly' release..."
           gh release delete nightly --cleanup-tag -y >/dev/null 2>&1 || true
           sleep 2
@@ -163,5 +165,21 @@ jobs:
             if [ -n "$old_tag" ] && [ "$old_tag" != "$TAG" ]; then
               echo "Deleting old nightly release: $old_tag"
               gh release delete "$old_tag" --cleanup-tag -y || true
+            fi
+          done
+          
+          echo "Cleaning up old 'nightly-YYYYMMDD-SHA' Docker images on GHCR..."
+          PACKAGE_URL="/users/${{ github.repository_owner }}/packages/container/${{ github.event.repository.name }}/versions"
+          OLD_NIGHTLY_VERSIONS=$(gh api --paginate -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$PACKAGE_URL" \
+            --jq ". | map(select(any(.metadata.container.tags[]; startswith(\"nightly-\") and (. != \"nightly\") and (. != \"$TAG\")))) | .[].id" 2>/dev/null || true)
+            
+          for version_id in $OLD_NIGHTLY_VERSIONS; do
+            if [ -n "$version_id" ]; then
+              echo "Deleting Docker image version ID: $version_id"
+              gh api -X DELETE -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "/users/${{ github.repository_owner }}/packages/container/${{ github.event.repository.name }}/versions/$version_id" || true
             fi
           done
