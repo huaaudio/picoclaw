@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/asr"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	_ "github.com/sipeed/picoclaw/pkg/channels/dingtalk"
@@ -60,6 +61,7 @@ type services struct {
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
 	HealthServer     *health.Server
+	VoiceAgentCancel context.CancelFunc
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
 }
@@ -302,7 +304,8 @@ func setupAndStartServices(
 	agentLoop.SetChannelManager(runningServices.ChannelManager)
 	agentLoop.SetMediaStore(runningServices.MediaStore)
 
-	if transcriber := voice.DetectTranscriber(cfg); transcriber != nil {
+	transcriber := asr.DetectTranscriber(cfg)
+	if transcriber != nil {
 		agentLoop.SetTranscriber(transcriber)
 		logger.InfoCF("voice", "Transcription enabled (agent-level)", map[string]any{"provider": transcriber.Name()})
 	}
@@ -320,6 +323,14 @@ func setupAndStartServices(
 
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {
 		return nil, fmt.Errorf("error starting channels: %w", err)
+	}
+
+	if transcriber != nil {
+		// Start Voice Agent Orchestrator after channels are ready.
+		vaCtx, vaCancel := context.WithCancel(context.Background())
+		runningServices.VoiceAgentCancel = vaCancel
+		voiceAgent := voice.NewAgent(msgBus, transcriber)
+		voiceAgent.Start(vaCtx)
 	}
 
 	fmt.Printf(
@@ -350,6 +361,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	// reload should not stop channel manager
 	if !isReload && runningServices.ChannelManager != nil {
 		runningServices.ChannelManager.StopAll(shutdownCtx)
+	}
+	if runningServices.VoiceAgentCancel != nil {
+		runningServices.VoiceAgentCancel()
 	}
 	if runningServices.DeviceService != nil {
 		runningServices.DeviceService.Stop()
@@ -528,10 +542,16 @@ func restartServices(
 		fmt.Println("  ✓ Device event service restarted")
 	}
 
-	transcriber := voice.DetectTranscriber(cfg)
+	transcriber := asr.DetectTranscriber(cfg)
 	al.SetTranscriber(transcriber)
 	if transcriber != nil {
 		logger.InfoCF("voice", "Transcription re-enabled (agent-level)", map[string]any{"provider": transcriber.Name()})
+
+		// Start Voice Agent Orchestrator on reload
+		vaCtx, vaCancel := context.WithCancel(context.Background())
+		runningServices.VoiceAgentCancel = vaCancel
+		voiceAgent := voice.NewAgent(msgBus, transcriber)
+		voiceAgent.Start(vaCtx)
 	} else {
 		logger.InfoCF("voice", "Transcription disabled", nil)
 	}

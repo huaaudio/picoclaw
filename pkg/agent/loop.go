@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/asr"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/commands"
@@ -30,8 +31,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	"github.com/sipeed/picoclaw/pkg/tts"
 	"github.com/sipeed/picoclaw/pkg/utils"
-	"github.com/sipeed/picoclaw/pkg/voice"
 )
 
 type AgentLoop struct {
@@ -51,7 +52,7 @@ type AgentLoop struct {
 	fallback       *providers.FallbackChain
 	channelManager *channels.Manager
 	mediaStore     media.MediaStore
-	transcriber    voice.Transcriber
+	transcriber    asr.Transcriber
 	cmdRegistry    *commands.Registry
 	mcp            mcpRuntime
 	hookRuntime    hookRuntime
@@ -154,6 +155,13 @@ func registerSharedTools(
 	provider providers.LLMProvider,
 ) {
 	allowReadPaths := buildAllowReadPatterns(cfg)
+	var ttsProvider tts.TTSProvider
+	if cfg.Tools.IsToolEnabled("send_tts") {
+		ttsProvider = tts.DetectTTS(cfg)
+		if ttsProvider == nil {
+			logger.WarnCF("voice-tts", "send_tts enabled but no TTS provider configured", nil)
+		}
+	}
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
@@ -248,6 +256,10 @@ func registerSharedTools(
 				allowReadPaths,
 			)
 			agent.Tools.Register(sendFileTool)
+		}
+
+		if ttsProvider != nil {
+			agent.Tools.Register(tools.NewSendTTSTool(ttsProvider, nil))
 		}
 
 		// Skill discovery and installation tools
@@ -1037,10 +1049,15 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 			sf.SetMediaStore(s)
 		}
 	})
+	registry.ForEachTool("send_tts", func(t tools.Tool) {
+		if st, ok := t.(*tools.SendTTSTool); ok {
+			st.SetMediaStore(s)
+		}
+	})
 }
 
 // SetTranscriber injects a voice transcriber for agent-level audio transcription.
-func (al *AgentLoop) SetTranscriber(t voice.Transcriber) {
+func (al *AgentLoop) SetTranscriber(t asr.Transcriber) {
 	al.transcriber = t
 }
 
@@ -2426,6 +2443,9 @@ turnLoop:
 					Channel: ts.channel,
 					ChatID:  ts.chatID,
 					Content: toolResult.ForUser,
+					Metadata: map[string]string{
+						"is_tool_call": "true",
+					},
 				})
 				logger.DebugCF("agent", "Sent tool result to user",
 					map[string]any{
