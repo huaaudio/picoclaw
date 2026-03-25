@@ -749,7 +749,11 @@ func (c *DiscordChannel) playTTS(ctx context.Context, vc *discordgo.VoiceConnect
 				stream, err = result.stream, result.err
 			case <-ctx.Done():
 				// Context canceled while waiting for prefetched audio; abort playback.
-				logger.InfoCF("discord", "TTS interrupted while waiting for prefetched audio", map[string]any{"at_sentence": i})
+				logger.InfoCF(
+					"discord",
+					"TTS interrupted while waiting for prefetched audio",
+					map[string]any{"at_sentence": i},
+				)
 				return
 			}
 		} else {
