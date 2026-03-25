@@ -742,15 +742,25 @@ func (c *DiscordChannel) playTTS(ctx context.Context, vc *discordgo.VoiceConnect
 		var err error
 
 		if prefetch != nil {
-			// Use prefetched result from previous iteration
-			result := <-prefetch
-			stream, err = result.stream, result.err
+			// Use prefetched result from previous iteration, but be responsive to cancellation.
+			var result ttResult
+			select {
+			case result = <-prefetch:
+				stream, err = result.stream, result.err
+			case <-ctx.Done():
+				// Context canceled while waiting for prefetched audio; abort playback.
+				logger.InfoCF("discord", "TTS interrupted while waiting for prefetched audio", map[string]any{"at_sentence": i})
+				return
+			}
 		} else {
 			// First sentence: synthesize directly
 			stream, err = c.tts.Synthesize(ctx, sentence)
 		}
 
 		if err != nil {
+			if stream != nil {
+				stream.Close()
+			}
 			logger.ErrorCF("discord", "TTS synthesize failed", map[string]any{"error": err.Error(), "sentence": i})
 			prefetch = nextPrefetch
 			continue
