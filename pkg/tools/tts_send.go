@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/audio/tts"
 	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/sipeed/picoclaw/pkg/tts"
 )
 
 type SendTTSTool struct {
