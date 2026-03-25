@@ -87,6 +87,13 @@ func (t *SendTTSTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to create temp file: %v", err)).WithError(err)
 	}
+	// Clean up the temp file unless ownership is transferred to the media store.
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(file.Name())
+		}
+	}()
 
 	_, err = io.Copy(file, stream)
 	if err != nil {
@@ -117,6 +124,14 @@ func (t *SendTTSTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to register audio: %v", err)).WithError(err)
 	}
+	removeTemp = false
 
-	return MediaResult("TTS audio sent", []string{ref})
+	// Return with ForUser set to original text, Media containing the audio ref,
+	// and mark as ResponseHandled so the audio is sent immediately without LLM intervention.
+	return &ToolResult{
+		ForLLM:          "TTS audio sent",
+		ForUser:         text,
+		Media:           []string{ref},
+		ResponseHandled: true,
+	}
 }

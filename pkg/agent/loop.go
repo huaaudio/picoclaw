@@ -1050,7 +1050,7 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 		if agent, ok := registry.GetAgent(agentID); ok {
 			agent.Tools.SetMediaStore(s)
 		}
-	})
+	}
 	registry.ForEachTool("send_tts", func(t tools.Tool) {
 		if st, ok := t.(*tools.SendTTSTool); ok {
 			st.SetMediaStore(s)
@@ -1080,19 +1080,23 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 
 	// Transcribe each audio media ref in order.
 	var transcriptions []string
+	var keptMedia []string
 	for _, ref := range msg.Media {
 		path, meta, err := al.mediaStore.ResolveWithMeta(ref)
 		if err != nil {
 			logger.WarnCF("voice", "Failed to resolve media ref", map[string]any{"ref": ref, "error": err})
+			keptMedia = append(keptMedia, ref)
 			continue
 		}
 		if !utils.IsAudioFile(meta.Filename, meta.ContentType) {
+			keptMedia = append(keptMedia, ref)
 			continue
 		}
 		result, err := al.transcriber.Transcribe(ctx, path)
 		if err != nil {
 			logger.WarnCF("voice", "Transcription failed", map[string]any{"ref": ref, "error": err})
 			transcriptions = append(transcriptions, "")
+			keptMedia = append(keptMedia, ref)
 			continue
 		}
 		transcriptions = append(transcriptions, result.Text)
@@ -1112,15 +1116,21 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 		}
 		text := transcriptions[idx]
 		idx++
+		if text == "" {
+			return match
+		}
 		return "[voice: " + text + "]"
 	})
 
 	// Append any remaining transcriptions not matched by an annotation.
 	for ; idx < len(transcriptions); idx++ {
-		newContent += "\n[voice: " + transcriptions[idx] + "]"
+		if transcriptions[idx] != "" {
+			newContent += "\n[voice: " + transcriptions[idx] + "]"
+		}
 	}
 
 	msg.Content = newContent
+	msg.Media = keptMedia
 	return msg, true
 }
 
@@ -2443,7 +2453,12 @@ turnLoop:
 				toolResult = tools.ErrorResult("hook returned nil tool result")
 			}
 
-			if !toolResult.Silent && toolResult.ForUser != "" && ts.opts.SendResponse {
+			// Send ForUser if not silent and has content.
+			// For ResponseHandled tools, send regardless of SendResponse setting,
+			// since they've already handled the response (e.g., send_tts, send_file).
+			shouldSendForUser := !toolResult.Silent && toolResult.ForUser != "" &&
+				(ts.opts.SendResponse || toolResult.ResponseHandled)
+			if shouldSendForUser {
 				al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 					Channel: ts.channel,
 					ChatID:  ts.chatID,
@@ -2502,19 +2517,6 @@ turnLoop:
 
 			if !toolResult.ResponseHandled {
 				allResponsesHandled = false
-			}
-
-			if !toolResult.Silent && toolResult.ForUser != "" && ts.opts.SendResponse {
-				al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-					Channel: ts.channel,
-					ChatID:  ts.chatID,
-					Content: toolResult.ForUser,
-				})
-				logger.DebugCF("agent", "Sent tool result to user",
-					map[string]any{
-						"tool":        toolName,
-						"content_len": len(toolResult.ForUser),
-					})
 			}
 
 			contentForLLM := toolResult.ContentForLLM()
