@@ -169,11 +169,19 @@ func buildCDNUploadURL(base, uploadParam, filekey string) string {
 		"&filekey=" + url.QueryEscape(filekey)
 }
 
-func (c *WeixinChannel) downloadCDNBuffer(ctx context.Context, encryptedQueryParam string) ([]byte, error) {
+func (c *WeixinChannel) downloadCDNBuffer(
+	ctx context.Context,
+	encryptedQueryParam,
+	fullURL string,
+) ([]byte, error) {
+	downloadURL := strings.TrimSpace(fullURL)
+	if downloadURL == "" {
+		downloadURL = buildCDNDownloadURL(c.cdnBaseURL(), encryptedQueryParam)
+	}
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		buildCDNDownloadURL(c.cdnBaseURL(), encryptedQueryParam),
+		downloadURL,
 		nil,
 	)
 	if err != nil {
@@ -203,9 +211,10 @@ func (c *WeixinChannel) downloadCDNBuffer(ctx context.Context, encryptedQueryPar
 func (c *WeixinChannel) downloadAndDecryptCDNBuffer(
 	ctx context.Context,
 	encryptedQueryParam string,
+	fullURL string,
 	key []byte,
 ) ([]byte, error) {
-	data, err := c.downloadCDNBuffer(ctx, encryptedQueryParam)
+	data, err := c.downloadCDNBuffer(ctx, encryptedQueryParam, fullURL)
 	if err != nil {
 		return nil, err
 	}
@@ -310,15 +319,18 @@ func isDownloadableMediaItem(item *MessageItem) bool {
 
 	switch item.Type {
 	case MessageItemTypeImage:
-		return item.ImageItem != nil && item.ImageItem.Media != nil && item.ImageItem.Media.EncryptQueryParam != ""
+		return item.ImageItem != nil && item.ImageItem.Media != nil &&
+			(item.ImageItem.Media.EncryptQueryParam != "" || item.ImageItem.Media.FullURL != "")
 	case MessageItemTypeVideo:
-		return item.VideoItem != nil && item.VideoItem.Media != nil && item.VideoItem.Media.EncryptQueryParam != ""
+		return item.VideoItem != nil && item.VideoItem.Media != nil &&
+			(item.VideoItem.Media.EncryptQueryParam != "" || item.VideoItem.Media.FullURL != "")
 	case MessageItemTypeFile:
-		return item.FileItem != nil && item.FileItem.Media != nil && item.FileItem.Media.EncryptQueryParam != ""
+		return item.FileItem != nil && item.FileItem.Media != nil &&
+			(item.FileItem.Media.EncryptQueryParam != "" || item.FileItem.Media.FullURL != "")
 	case MessageItemTypeVoice:
 		return item.VoiceItem != nil &&
 			item.VoiceItem.Media != nil &&
-			item.VoiceItem.Media.EncryptQueryParam != "" &&
+			(item.VoiceItem.Media.EncryptQueryParam != "" || item.VoiceItem.Media.FullURL != "") &&
 			strings.TrimSpace(item.VoiceItem.Text) == ""
 	default:
 		return false
@@ -438,12 +450,17 @@ func (c *WeixinChannel) downloadMediaFromItem(
 		if err != nil {
 			return "", err
 		}
-		data, err := c.downloadAndDecryptCDNBuffer(ctx, item.ImageItem.Media.EncryptQueryParam, func() []byte {
-			if ok {
-				return key
-			}
-			return nil
-		}())
+		data, err := c.downloadAndDecryptCDNBuffer(
+			ctx,
+			item.ImageItem.Media.EncryptQueryParam,
+			item.ImageItem.Media.FullURL,
+			func() []byte {
+				if ok {
+					return key
+				}
+				return nil
+			}(),
+		)
 		if err != nil {
 			return "", err
 		}
@@ -454,7 +471,12 @@ func (c *WeixinChannel) downloadMediaFromItem(
 		if err != nil {
 			return "", err
 		}
-		silk, err := c.downloadAndDecryptCDNBuffer(ctx, item.VoiceItem.Media.EncryptQueryParam, key)
+		silk, err := c.downloadAndDecryptCDNBuffer(
+			ctx,
+			item.VoiceItem.Media.EncryptQueryParam,
+			item.VoiceItem.Media.FullURL,
+			key,
+		)
 		if err != nil {
 			return "", err
 		}
@@ -468,7 +490,12 @@ func (c *WeixinChannel) downloadMediaFromItem(
 		if err != nil {
 			return "", err
 		}
-		data, err := c.downloadAndDecryptCDNBuffer(ctx, item.FileItem.Media.EncryptQueryParam, key)
+		data, err := c.downloadAndDecryptCDNBuffer(
+			ctx,
+			item.FileItem.Media.EncryptQueryParam,
+			item.FileItem.Media.FullURL,
+			key,
+		)
 		if err != nil {
 			return "", err
 		}
@@ -484,7 +511,12 @@ func (c *WeixinChannel) downloadMediaFromItem(
 		if err != nil {
 			return "", err
 		}
-		data, err := c.downloadAndDecryptCDNBuffer(ctx, item.VideoItem.Media.EncryptQueryParam, key)
+		data, err := c.downloadAndDecryptCDNBuffer(
+			ctx,
+			item.VideoItem.Media.EncryptQueryParam,
+			item.VideoItem.Media.FullURL,
+			key,
+		)
 		if err != nil {
 			return "", err
 		}
@@ -701,11 +733,13 @@ func (c *WeixinChannel) uploadLocalFile(
 		}
 		return nil, fmt.Errorf("getuploadurl failed: ret=%d errcode=%d errmsg=%s", resp.Ret, resp.Errcode, resp.Errmsg)
 	}
-	if strings.TrimSpace(resp.UploadParam) == "" {
-		return nil, fmt.Errorf("getuploadurl returned empty upload_param")
+	uploadParam := strings.TrimSpace(resp.UploadParam)
+	uploadFullURL := strings.TrimSpace(resp.UploadFullURL)
+	if uploadParam == "" && uploadFullURL == "" {
+		return nil, fmt.Errorf("getuploadurl returned no upload URL")
 	}
 
-	downloadParam, err := c.uploadBufferToCDN(ctx, data, resp.UploadParam, filekey, aesKey)
+	downloadParam, err := c.uploadBufferToCDN(ctx, data, uploadParam, uploadFullURL, filekey, aesKey)
 	if err != nil {
 		return nil, err
 	}
@@ -723,6 +757,7 @@ func (c *WeixinChannel) uploadBufferToCDN(
 	ctx context.Context,
 	plaintext []byte,
 	uploadParam,
+	uploadFullURL,
 	filekey string,
 	aesKey []byte,
 ) (string, error) {
@@ -731,7 +766,13 @@ func (c *WeixinChannel) uploadBufferToCDN(
 		return "", err
 	}
 
-	uploadURL := buildCDNUploadURL(c.cdnBaseURL(), uploadParam, filekey)
+	uploadURL := strings.TrimSpace(uploadFullURL)
+	if uploadURL == "" {
+		if strings.TrimSpace(uploadParam) == "" {
+			return "", fmt.Errorf("missing CDN upload URL")
+		}
+		uploadURL = buildCDNUploadURL(c.cdnBaseURL(), uploadParam, filekey)
+	}
 	var lastErr error
 
 	for attempt := 1; attempt <= weixinUploadRetryMax; attempt++ {

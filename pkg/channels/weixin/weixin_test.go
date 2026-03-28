@@ -72,7 +72,7 @@ func TestDownloadAndDecryptCDNBuffer(t *testing.T) {
 		typingCache: make(map[string]typingTicketCacheEntry),
 	}
 
-	got, err := ch.downloadAndDecryptCDNBuffer(context.Background(), "token", key)
+	got, err := ch.downloadAndDecryptCDNBuffer(context.Background(), "token", "", key)
 	if err != nil {
 		t.Fatalf("downloadAndDecryptCDNBuffer() error = %v", err)
 	}
@@ -120,7 +120,7 @@ func TestUploadBufferToCDN(t *testing.T) {
 		typingCache: make(map[string]typingTicketCacheEntry),
 	}
 
-	got, err := ch.uploadBufferToCDN(context.Background(), plaintext, "upload-param", "file-key", key)
+	got, err := ch.uploadBufferToCDN(context.Background(), plaintext, "upload-param", "", "file-key", key)
 	if err != nil {
 		t.Fatalf("uploadBufferToCDN() error = %v", err)
 	}
