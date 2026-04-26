@@ -19,6 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
@@ -5217,13 +5218,19 @@ func TestParallelMessageProcessing_SameSessionProcessedSequentially(t *testing.T
 	})
 	defer al.Close()
 
-	sub := al.SubscribeEvents(64)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		64,
+		runtimeevents.KindAgentTurnStart,
+	)
+	defer closeRuntimeEvents()
 
 	go func() {
-		for evt := range sub.C {
-			if evt.Kind == EventKindTurnStart {
+		for evt := range runtimeCh {
+			if evt.Kind == runtimeevents.KindAgentTurnStart {
 				mu.Lock()
-				turnIDs[evt.Meta.TurnID] = true
+				turnIDs[evt.Scope.TurnID] = true
 				mu.Unlock()
 			}
 		}

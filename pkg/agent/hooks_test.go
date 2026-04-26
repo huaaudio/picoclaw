@@ -885,8 +885,13 @@ func TestAgentLoop_Hooks_ToolApproverCanDeny(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		16,
+		runtimeevents.KindAgentToolExecSkipped,
+	)
+	defer closeRuntimeEvents()
 
 	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
 		SessionKey:      "session-1",
@@ -905,8 +910,8 @@ func TestAgentLoop_Hooks_ToolApproverCanDeny(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expected, resp)
 	}
 
-	events := collectEventStream(sub.C)
-	skippedEvt, ok := findEvent(events, EventKindToolExecSkipped)
+	events := collectRuntimeEventStream(runtimeCh)
+	skippedEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentToolExecSkipped)
 	if !ok {
 		t.Fatal("expected tool skipped event")
 	}
@@ -961,8 +966,13 @@ func TestAgentLoop_Hooks_ToolRespondAction(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		16,
+		runtimeevents.KindAgentToolExecEnd,
+	)
+	defer closeRuntimeEvents()
 
 	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
 		SessionKey:      "session-1",
@@ -984,8 +994,8 @@ func TestAgentLoop_Hooks_ToolRespondAction(t *testing.T) {
 	}
 
 	// Verify event stream has ToolExecEnd, not actual tool execution
-	events := collectEventStream(sub.C)
-	endEvt, ok := findEvent(events, EventKindToolExecEnd)
+	events := collectRuntimeEventStream(runtimeCh)
+	endEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentToolExecEnd)
 	if !ok {
 		t.Fatal("expected tool exec end event")
 	}
@@ -1150,8 +1160,13 @@ func TestAgentLoop_HookRespond_MediaError(t *testing.T) {
 			sendErr: errors.New("channel unavailable"),
 		})
 
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		16,
+		runtimeevents.KindAgentToolExecEnd,
+	)
+	defer closeRuntimeEvents()
 
 	_, err := al.runAgentLoop(context.Background(), agent, processOptions{
 		SessionKey:      "session-media-err",
@@ -1166,8 +1181,8 @@ func TestAgentLoop_HookRespond_MediaError(t *testing.T) {
 		t.Fatalf("runAgentLoop failed: %v", err)
 	}
 
-	events := collectEventStream(sub.C)
-	endEvt, ok := findEvent(events, EventKindToolExecEnd)
+	events := collectRuntimeEventStream(runtimeCh)
+	endEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentToolExecEnd)
 	if !ok {
 		t.Fatal("expected ToolExecEnd event")
 	}
@@ -1205,8 +1220,13 @@ func TestAgentLoop_HookRespond_BusFallback(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		16,
+		runtimeevents.KindAgentToolExecEnd,
+	)
+	defer closeRuntimeEvents()
 
 	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
 		SessionKey:      "session-bus-fallback",
@@ -1221,8 +1241,8 @@ func TestAgentLoop_HookRespond_BusFallback(t *testing.T) {
 		t.Fatalf("runAgentLoop failed: %v", err)
 	}
 
-	events := collectEventStream(sub.C)
-	endEvt, ok := findEvent(events, EventKindToolExecEnd)
+	events := collectRuntimeEventStream(runtimeCh)
+	endEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentToolExecEnd)
 	if !ok {
 		t.Fatal("expected ToolExecEnd event")
 	}
@@ -1367,8 +1387,13 @@ func TestAgentLoop_HookRespond_InterruptSkipsRemaining(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	sub := al.SubscribeEvents(32)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		32,
+		runtimeevents.KindAgentToolExecSkipped,
+	)
+	defer closeRuntimeEvents()
 
 	sessionKey := session.BuildMainSessionKey(routing.DefaultAgentID)
 
@@ -1407,9 +1432,9 @@ func TestAgentLoop_HookRespond_InterruptSkipsRemaining(t *testing.T) {
 		t.Fatal("timeout waiting for result")
 	}
 
-	events := collectEventStream(sub.C)
+	events := collectRuntimeEventStream(runtimeCh)
 
-	skippedEvts := filterEvents(events, EventKindToolExecSkipped)
+	skippedEvts := filterRuntimeEvents(events, runtimeevents.KindAgentToolExecSkipped)
 	if len(skippedEvts) < 1 {
 		t.Fatal("expected at least one ToolExecSkipped event after interrupt")
 	}
@@ -1447,8 +1472,14 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 		t.Fatalf("MountHook failed: %v", err)
 	}
 
-	sub := al.SubscribeEvents(32)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		32,
+		runtimeevents.KindAgentToolExecEnd,
+		runtimeevents.KindAgentToolExecSkipped,
+	)
+	defer closeRuntimeEvents()
 
 	sessionKey := session.BuildMainSessionKey(routing.DefaultAgentID)
 
@@ -1468,14 +1499,14 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 		resultCh <- result{resp: resp, err: err}
 	}()
 
-	collectedEvents := make([]Event, 0, 8)
+	collectedEvents := make([]runtimeevents.Event, 0, 8)
 	steered := false
 	deadline := time.After(3 * time.Second)
 	for !steered {
 		select {
-		case evt := <-sub.C:
+		case evt := <-runtimeCh:
 			collectedEvents = append(collectedEvents, evt)
-			if evt.Kind != EventKindToolExecEnd {
+			if evt.Kind != runtimeevents.KindAgentToolExecEnd {
 				continue
 			}
 			payload, ok := evt.Payload.(ToolExecEndPayload)
@@ -1498,9 +1529,9 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 		t.Fatal("timeout waiting for result")
 	}
 
-	events := append(collectedEvents, collectEventStream(sub.C)...)
+	events := append(collectedEvents, collectRuntimeEventStream(runtimeCh)...)
 
-	skippedEvts := filterEvents(events, EventKindToolExecSkipped)
+	skippedEvts := filterRuntimeEvents(events, runtimeevents.KindAgentToolExecSkipped)
 	if len(skippedEvts) < 1 {
 		t.Fatal("expected at least one ToolExecSkipped event after steering")
 	}
@@ -1564,14 +1595,4 @@ func TestCloneStringAnyMap_EmptyMapReturnsNonNil(t *testing.T) {
 			t.Fatal("modifying clone should not affect source")
 		}
 	})
-}
-
-func filterEvents(events []Event, kind EventKind) []Event {
-	var result []Event
-	for _, evt := range events {
-		if evt.Kind == kind {
-			result = append(result, evt)
-		}
-	}
-	return result
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -146,8 +147,13 @@ func TestAgentLoop_MountProcessHook_ApprovalDeny(t *testing.T) {
 		t.Fatalf("MountProcessHook failed: %v", err)
 	}
 
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		16,
+		runtimeevents.KindAgentToolExecSkipped,
+	)
+	defer closeRuntimeEvents()
 
 	resp, err := al.runAgentLoop(context.Background(), agent, processOptions{
 		SessionKey:      "session-1",
@@ -167,8 +173,8 @@ func TestAgentLoop_MountProcessHook_ApprovalDeny(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expected, resp)
 	}
 
-	events := collectEventStream(sub.C)
-	skippedEvt, ok := findEvent(events, EventKindToolExecSkipped)
+	events := collectRuntimeEventStream(runtimeCh)
+	skippedEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentToolExecSkipped)
 	if !ok {
 		t.Fatal("expected tool skipped event")
 	}

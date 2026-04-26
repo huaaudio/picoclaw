@@ -64,3 +64,40 @@ func waitForRuntimeEvent(
 		}
 	}
 }
+
+func collectRuntimeEventStream(ch <-chan runtimeevents.Event) []runtimeevents.Event {
+	var events []runtimeevents.Event
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				return events
+			}
+			events = append(events, evt)
+		default:
+			return events
+		}
+	}
+}
+
+func findRuntimeEvent(
+	events []runtimeevents.Event,
+	kind runtimeevents.Kind,
+) (runtimeevents.Event, bool) {
+	for _, evt := range events {
+		if evt.Kind == kind {
+			return evt, true
+		}
+	}
+	return runtimeevents.Event{}, false
+}
+
+func filterRuntimeEvents(events []runtimeevents.Event, kind runtimeevents.Kind) []runtimeevents.Event {
+	var filtered []runtimeevents.Event
+	for _, evt := range events {
+		if evt.Kind == kind {
+			filtered = append(filtered, evt)
+		}
+	}
+	return filtered
+}

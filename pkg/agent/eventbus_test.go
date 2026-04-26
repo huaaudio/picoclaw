@@ -222,8 +222,18 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
+	expectedKinds := []runtimeevents.Kind{
+		runtimeevents.KindAgentTurnStart,
+		runtimeevents.KindAgentLLMRequest,
+		runtimeevents.KindAgentLLMResponse,
+		runtimeevents.KindAgentToolExecStart,
+		runtimeevents.KindAgentToolExecEnd,
+		runtimeevents.KindAgentLLMRequest,
+		runtimeevents.KindAgentLLMResponse,
+		runtimeevents.KindAgentTurnEnd,
+	}
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(t, al, 16, expectedKinds...)
+	defer closeRuntimeEvents()
 
 	response, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
 		SessionKey:      "session-1",
@@ -266,49 +276,36 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 		t.Fatalf("expected final response 'done', got %q", response)
 	}
 
-	events := collectEventStream(sub.C)
+	events := collectRuntimeEventStream(runtimeCh)
 	if len(events) != 8 {
 		t.Fatalf("expected 8 events, got %d", len(events))
 	}
 
-	kinds := make([]EventKind, 0, len(events))
+	kinds := make([]runtimeevents.Kind, 0, len(events))
 	for _, evt := range events {
 		kinds = append(kinds, evt.Kind)
 	}
 
-	expectedKinds := []EventKind{
-		EventKindTurnStart,
-		EventKindLLMRequest,
-		EventKindLLMResponse,
-		EventKindToolExecStart,
-		EventKindToolExecEnd,
-		EventKindLLMRequest,
-		EventKindLLMResponse,
-		EventKindTurnEnd,
-	}
 	if !slices.Equal(kinds, expectedKinds) {
 		t.Fatalf("unexpected event sequence: got %v want %v", kinds, expectedKinds)
 	}
 
-	turnID := events[0].Meta.TurnID
+	turnID := events[0].Scope.TurnID
+	if turnID == "" {
+		t.Fatal("expected runtime events to include turn id")
+	}
 	for i, evt := range events {
-		if evt.Meta.TurnID != turnID {
-			t.Fatalf("event %d has mismatched turn id %q, want %q", i, evt.Meta.TurnID, turnID)
+		if evt.Scope.TurnID != turnID {
+			t.Fatalf("event %d has mismatched turn id %q, want %q", i, evt.Scope.TurnID, turnID)
 		}
-		if evt.Meta.SessionKey != "session-1" {
-			t.Fatalf("event %d has session key %q, want session-1", i, evt.Meta.SessionKey)
+		if evt.Scope.SessionKey != "session-1" {
+			t.Fatalf("event %d has session key %q, want session-1", i, evt.Scope.SessionKey)
 		}
-		if evt.Context == nil || evt.Context.Inbound == nil {
-			t.Fatalf("event %d missing inbound turn context", i)
+		if evt.Scope.Channel != "cli" || evt.Scope.ChatID != "direct" || evt.Scope.SenderID != "tester" {
+			t.Fatalf("event %d scope = %+v", i, evt.Scope)
 		}
-		if evt.Context.Inbound.Channel != "cli" || evt.Context.Inbound.SenderID != "tester" {
-			t.Fatalf("event %d inbound context = %+v", i, evt.Context.Inbound)
-		}
-		if evt.Context.Route == nil || evt.Context.Route.AgentID != "main" {
-			t.Fatalf("event %d missing route context: %+v", i, evt.Context.Route)
-		}
-		if evt.Context.Scope == nil || evt.Context.Scope.Values["sender"] != "tester" {
-			t.Fatalf("event %d missing session scope: %+v", i, evt.Context.Scope)
+		if evt.Scope.AgentID != "main" {
+			t.Fatalf("event %d has agent id %q, want main", i, evt.Scope.AgentID)
 		}
 	}
 
@@ -404,8 +401,15 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
 
-	sub := al.SubscribeEvents(32)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		32,
+		runtimeevents.KindAgentSteeringInjected,
+		runtimeevents.KindAgentToolExecSkipped,
+		runtimeevents.KindAgentInterruptReceived,
+	)
+	defer closeRuntimeEvents()
 
 	resultCh := make(chan string, 1)
 	go func() {
@@ -432,8 +436,8 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 		t.Fatal("timeout waiting for steered response")
 	}
 
-	events := collectEventStream(sub.C)
-	steeringEvt, ok := findEvent(events, EventKindSteeringInjected)
+	events := collectRuntimeEventStream(runtimeCh)
+	steeringEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentSteeringInjected)
 	if !ok {
 		t.Fatal("expected steering injected event")
 	}
@@ -445,7 +449,7 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 		t.Fatalf("expected 1 steering message, got %d", steeringPayload.Count)
 	}
 
-	skippedEvt, ok := findEvent(events, EventKindToolExecSkipped)
+	skippedEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentToolExecSkipped)
 	if !ok {
 		t.Fatal("expected skipped tool event")
 	}
@@ -457,7 +461,7 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 		t.Fatalf("expected skipped tool_two, got %q", skippedPayload.Tool)
 	}
 
-	interruptEvt, ok := findEvent(events, EventKindInterruptReceived)
+	interruptEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentInterruptReceived)
 	if !ok {
 		t.Fatal("expected interrupt received event")
 	}
@@ -515,8 +519,14 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 		{Role: "user", Content: "Trigger message"},
 	})
 
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		16,
+		runtimeevents.KindAgentLLMRetry,
+		runtimeevents.KindAgentContextCompress,
+	)
+	defer closeRuntimeEvents()
 
 	resp, err := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
 		SessionKey:      "session-1",
@@ -534,8 +544,8 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 		t.Fatalf("expected retry success, got %q", resp)
 	}
 
-	events := collectEventStream(sub.C)
-	retryEvt, ok := findEvent(events, EventKindLLMRetry)
+	events := collectRuntimeEventStream(runtimeCh)
+	retryEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentLLMRetry)
 	if !ok {
 		t.Fatal("expected llm retry event")
 	}
@@ -550,7 +560,7 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 		t.Fatalf("expected retry attempt 1, got %d", retryPayload.Attempt)
 	}
 
-	compressEvt, ok := findEvent(events, EventKindContextCompress)
+	compressEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentContextCompress)
 	if !ok {
 		t.Fatal("expected context compress event")
 	}
@@ -603,14 +613,19 @@ func TestAgentLoop_EmitsSessionSummarizeEvent(t *testing.T) {
 		{Role: "assistant", Content: "Answer three"},
 	})
 
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		16,
+		runtimeevents.KindAgentSessionSummarize,
+	)
+	defer closeRuntimeEvents()
 
 	lcm := &legacyContextManager{al: al}
 	lcm.summarizeSession(defaultAgent, "session-1")
 
-	events := collectEventStream(sub.C)
-	summaryEvt, ok := findEvent(events, EventKindSessionSummarize)
+	events := collectRuntimeEventStream(runtimeCh)
+	summaryEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentSessionSummarize)
 	if !ok {
 		t.Fatal("expected session summarize event")
 	}
@@ -721,21 +736,6 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 	}
 }
 
-func collectEventStream(ch <-chan Event) []Event {
-	var events []Event
-	for {
-		select {
-		case evt, ok := <-ch:
-			if !ok {
-				return events
-			}
-			events = append(events, evt)
-		default:
-			return events
-		}
-	}
-}
-
 func receiveLegacyEvent(t *testing.T, ch <-chan Event) Event {
 	t.Helper()
 
@@ -764,36 +764,6 @@ func receiveRuntimeEvent(t *testing.T, ch <-chan runtimeevents.Event) runtimeeve
 		t.Fatal("timed out waiting for runtime event")
 		return runtimeevents.Event{}
 	}
-}
-
-func waitForEvent(t *testing.T, ch <-chan Event, timeout time.Duration, match func(Event) bool) Event {
-	t.Helper()
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	for {
-		select {
-		case evt, ok := <-ch:
-			if !ok {
-				t.Fatal("event stream closed before expected event arrived")
-			}
-			if match(evt) {
-				return evt
-			}
-		case <-timer.C:
-			t.Fatal("timed out waiting for expected event")
-		}
-	}
-}
-
-func findEvent(events []Event, kind EventKind) (Event, bool) {
-	for _, evt := range events {
-		if evt.Kind == kind {
-			return evt, true
-		}
-	}
-	return Event{}, false
 }
 
 type stringError string
